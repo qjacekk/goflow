@@ -19,6 +19,7 @@ functions or constructors).
 
 The following is an example of a simple pipeline with two Sources and 3 Outputs:
 
+```
 string_source (c 2)
  +--> string_processor (c 1)
  |     +--> string_to_int (c 1)
@@ -30,7 +31,24 @@ string_source (c 2)
 int_source (c 1)
  +--> int_to_string (c 1)
        +--> string_out (c 1)
+```
 
 The pipeline consists of 2 sources _string_source_ and _int_source_ (these sources are independent but they share the same output _string_out_ i.e. they write to the same place).
 The _string_source_ has concurrency level 2 which means it runs in two separate threads. It produces events of type string. Those events are then sent down to task _string_processor_ (which performs some kind of operation on the input), and output _string_out_ (which accepts string input). The output of _string_processor_ (a string) is passed to _string_to_int_ which performs some kind of operation of the string (e.g. returns its length) which yeilds an int value sent down to _int_out_ (which accepts int as an input). 
 And so on (for the implementation details see examples/simple/simple.go).
+
+## Why?
+
+- I need a fast lightweight API for this kind of processing that can be quickly deployed in a docker.
+- I need something that is as versatile as Apache Flink/Spark but without the Java development and cluster management overhead.
+- Python is too slow.
+
+## TODO list
+
+- [ ] [Prometheus instrumentation](https://github.com/prometheus/client_golang). Add basic built-in metrics (counters of events in/out, errors, channel buffer len, processing delays etc.).
+- [ ] Add basic file sources: csv, avro, parquet, json
+- [ ] Add basic file outputs: csv, avro, parquet, json with partitioning and bucketing.
+- [ ] Kafka Source & Output
+- [ ] Add basic stateful tasks: keyed stateful mapping
+- [ ] Add fault tollerance: checkpointing
+- [ ] Add examples/templates
