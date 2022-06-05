@@ -9,7 +9,7 @@ import (
 func main() {
 	// producer (closure)
 	i := 0
-	string_producer := func(ctx *flow.WorkerContext) (string, bool) {
+	string_producer := func(ctx *flow.Context) (string, bool) {
 		if i < 300 {
 			i++
 			return fmt.Sprintf("src_%s_%d", *ctx.Id, i), true
@@ -18,7 +18,7 @@ func main() {
 		}
 	}
 	j := 0
-	int_producer := func(ctx *flow.WorkerContext) (int, bool) {
+	int_producer := func(ctx *flow.Context) (int, bool) {
 		if j < 300 {
 			j++
 			return j, true
@@ -27,28 +27,28 @@ func main() {
 		}
 	}
 	// task functions
-	string_processor := func (input string, ctx *flow.WorkerContext) (string, bool) {
+	string_processor := func (input string, ctx *flow.Context) (string, bool) {
 		fmt.Println(*ctx.Id, "input:", input)
 		output := fmt.Sprintf("%v_after_%s", input, *ctx.Id)
 		return output, true
 	}
-	string_to_int_processor := func (input string, ctx *flow.WorkerContext) (int, bool) {
+	string_to_int_processor := func (input string, ctx *flow.Context) (int, bool) {
 		fmt.Println(*ctx.Id, "input:", input)
 		output := len(input)
 		return output, true
 	}
 	// this one changes the type
-	int_to_string_processor := func (input int, ctx *flow.WorkerContext) (string, bool) {
+	int_to_string_processor := func (input int, ctx *flow.Context) (string, bool) {
 		fmt.Println(*ctx.Id, "input:", input)
 		output := fmt.Sprintf("%v_after_%s", input, *ctx.Id)
 		return output, true
 	}
 
 	// output functions
-	string_output := func (data string, ctx *flow.WorkerContext) {
+	string_output := func (data string, ctx *flow.Context) {
 		fmt.Println(*ctx.Id, "output:", data)
 	}
-	int_output := func (data int, ctx *flow.WorkerContext) {
+	int_output := func (data int, ctx *flow.Context) {
 		fmt.Println(*ctx.Id, "output:", data)
 	}
 	

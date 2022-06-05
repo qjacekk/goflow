@@ -49,7 +49,7 @@ func (p *CsvReader) SkipHeader() {
 	}
 }
 // Read next row in the csv file and returns it as a slice of strings
-func (p *CsvReader) Read(ctx *flow.WorkerContext) ([]string, bool) {
+func (p *CsvReader) Read(ctx *flow.Context) ([]string, bool) {
 	record, err := p.csvReader.Read()
 	if err == io.EOF {
 		p.f.Close()

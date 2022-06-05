@@ -63,7 +63,6 @@ type node struct {
 	name string
 	conc int
 	kind NodeKind
-	nodeContext NodeContext
 }
 // Returns the name of a Node
 func (n node) Name() string {
@@ -77,21 +76,14 @@ func (n node) Kind() NodeKind {
 	return n.kind
 }
 
-/* CONTEXTS */
-// NodeContext is a structure passed to a worker thread in the processing function.
-// NodeContext contains Node specific variables that are shared by each processing thread.
-// NodeContext is not thread safe - modification should be synchronized by the user.
-type NodeContext struct {
-	NodeInstance Node
-	NodeState *any
-}
+/* CONTEXT */
 
 // NodeContext is a structure passed to a worker thread in the processing function.
 // WorkerContext contains thread-local parameters and variables.
-type WorkerContext struct {
+type Context struct {
 	Id *string  // workerId, unique for each thread (goroutine)
-	NodeCtx *NodeContext
-	State *any
+	NodeInstance Node
+	State any
 }
 
 
@@ -327,14 +319,14 @@ func SendsTo[T any](snd Sender[T], rec Receiver[T], queueSize int) {
 type Source[OUT any] struct {
 	node
 	sender[OUT] 
-	produce     func(sourceCtx *WorkerContext) (OUT, bool)
+	produce     func(sourceCtx *Context) (OUT, bool)
 	// instrumentation
 	outCnt prometheus.Counter
 	produceTimeHist prometheus.Histogram
 }
 
 // Source constructor that creates a new instance and registers it in the Pipeline.
-func NewSource[OUT any](name string, conc int, produce func(t_id *WorkerContext)(OUT, bool)) Sender[OUT] {
+func NewSource[OUT any](name string, conc int, produce func(sourceCtx *Context)(OUT, bool)) Sender[OUT] {
 	if conc < 1 {
 		log.Panic("concurrency must be >= 1")
 	}
@@ -357,13 +349,12 @@ func NewSource[OUT any](name string, conc int, produce func(t_id *WorkerContext)
 	PReg.MustRegister(outCnt)
 	PReg.MustRegister(produceTimeHist)
 	src := Source[OUT]{node: node{name: name, conc: conc, kind: source}, produce: produce, outCnt: outCnt, produceTimeHist: produceTimeHist}
-	src.nodeContext = NodeContext{NodeInstance: src}
 	Pipeline.RegisterNode(&src)
 	return &src
 }
 
 // Starts processing
-func (s Source[OUT]) run() {
+func (s *Source[OUT]) run() {
 	for _, mq := range s.out {
 		mq.AddProducer(s.conc)
 	}
@@ -372,7 +363,7 @@ func (s Source[OUT]) run() {
 		go func(name string, id int) {
 			defer s.close()
 			s_id := fmt.Sprintf("%s_%d", s.Name(), id)
-			workerCtx := WorkerContext{Id: &s_id, NodeCtx: &s.nodeContext}
+			workerCtx := Context{Id: &s_id, NodeInstance: s}
 			log.Printf("Starting source %s\n", s_id)
 			for {
 				start := time.Now()
@@ -406,8 +397,7 @@ type Task[IN any, OUT any] struct {
 	node
 	receiver[IN]
 	sender[OUT]
-	nodeContext NodeContext
-	execute     func(input IN, taskCtx *WorkerContext) (OUT, bool)
+	execute     func(input IN, taskCtx *Context) (OUT, bool)
 	// instrumentation
 	inCnt prometheus.Counter
 	outCnt prometheus.Counter
@@ -415,7 +405,7 @@ type Task[IN any, OUT any] struct {
 }
 
 // Task constructor that creates a new instance and registers it in the Pipeline.
-func NewTask[IN any, OUT any](name string, conc int, execute func(IN, *WorkerContext) (OUT, bool)) *Task[IN, OUT] {
+func NewTask[IN any, OUT any](name string, conc int, execute func(IN, *Context) (OUT, bool)) *Task[IN, OUT] {
 	if conc < 1 {
 		log.Panic("task concurrency must be >= 1")
 	}
@@ -445,7 +435,6 @@ func NewTask[IN any, OUT any](name string, conc int, execute func(IN, *WorkerCon
 	PReg.MustRegister(outCnt)
 	PReg.MustRegister(runTimeHist)
 	t := Task[IN, OUT]{node: node{name: name, conc: conc, kind: task}, execute: execute, inCnt: inCnt, outCnt: outCnt, runTimeHist: runTimeHist}
-	t.nodeContext = NodeContext{NodeInstance: t}
 	Pipeline.RegisterNode(&t)
 	return &t
 }
@@ -455,7 +444,7 @@ func (t *Task[IN, OUT]) R() Receiver[IN] { return t}
 func (t *Task[IN, OUT]) S() Sender[OUT] { return t}
 
 // starts processing
-func (t Task[IN, OUT]) run() {
+func (t *Task[IN, OUT]) run() {
 	for _, mq := range t.out {
 		mq.AddProducer(t.conc)
 	}
@@ -464,7 +453,7 @@ func (t Task[IN, OUT]) run() {
 		go func(name string, id int) {
 			defer t.close()
 			t_id := fmt.Sprintf("%s_%d", t.name, id)
-			workerCtx := WorkerContext{Id: &t_id, NodeCtx: &t.nodeContext}
+			workerCtx := Context{Id: &t_id, NodeInstance: t}
 			log.Printf("Starting task %s\n", t_id)
 			for input := range t.in.queue {
 				t.inCnt.Inc()
@@ -485,22 +474,24 @@ func (t Task[IN, OUT]) run() {
 
 
 /*    OUTPUT    */
-
+type Writer[R any] interface {
+	Write(record R, ctx *Context)
+	Close()
+}
 
 // Output receives events and generates some kind of output to external world (e.g. writes to file
 // or database).
 type Output[IN any] struct {
 	node
 	receiver[IN]
-	nodeContext NodeContext
-	consume  func(data IN, outputCtx *WorkerContext)
+	consume  func(data IN, outputCtx *Context)
 	closeCallback func()
 	// instrumentation
 	inCnt prometheus.Counter
 	consumeTimeHist prometheus.Histogram
 }
 
-func newOutput[IN any](name string, conc int, consume func(data IN, t_id *WorkerContext)) *Output[IN] {
+func newOutput[IN any](name string, conc int, consume func(data IN, t_id *Context)) *Output[IN] {
 	if conc < 1 {
 		log.Panic("concurrency must be >= 1")
 	}
@@ -524,32 +515,31 @@ func newOutput[IN any](name string, conc int, consume func(data IN, t_id *Worker
 	PReg.MustRegister(consumeTimeHist)
 
 	o := Output[IN]{node: node{name: name, conc: conc, kind: output}, consume: consume, inCnt: inCnt, consumeTimeHist: consumeTimeHist}
-	o.nodeContext = NodeContext{NodeInstance: o}
 	Pipeline.RegisterNode(&o)
 	return &o
 }
 
 // Output constructor that creates a new instance and registers it in the Pipeline.
-func NewOutput[IN any](name string, conc int, consume func(data IN, t_id *WorkerContext)) Receiver[IN] {
+func NewOutput[IN any](name string, conc int, consume func(data IN, t_id *Context)) Receiver[IN] {
 	o := newOutput(name, conc, consume)
 	return o
 }
 
 // Output constructor that creates a new instance and registers it in the Pipeline.
-func NewOutputWithClose[IN any](name string, conc int, consume func(data IN, t_id *WorkerContext), close func()) Receiver[IN] {
+func NewOutputWithClose[IN any](name string, conc int, consume func(data IN, t_id *Context), close func()) Receiver[IN] {
 	o := newOutput(name, conc, consume)
 	o.closeCallback = close
 	return o
 }
 
 // starts processing
-func (o Output[IN]) run() {
+func (o *Output[IN]) run() {
 	for id := 0; id < o.conc; id++ {
 		wg.Add(1)
 		go func(name string, id int) {
 			defer wg.Done()
 			o_id := fmt.Sprintf("%s_%d", o.name, id)
-			workerCtx := WorkerContext{Id: &o_id, NodeCtx: &o.nodeContext}
+			workerCtx := Context{Id: &o_id, NodeInstance: o}
 			log.Printf("Starting output %s\n", o_id)
 			for input := range o.in.queue {
 				o.inCnt.Inc()

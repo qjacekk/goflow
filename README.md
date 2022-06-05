@@ -47,11 +47,14 @@ And so on (for the implementation details see examples/simple/simple.go).
 ## TODO list
 
 - [ ] unit tests
-- [ ] [Prometheus instrumentation](https://github.com/prometheus/client_golang). Add basic built-in metrics (counters of events in/out, errors, channel buffer len, processing delays etc.).
-- [ ] Add basic file sources: csv, avro, parquet, json
-- [ ] Add basic file outputs: csv, avro, parquet, json with partitioning and bucketing.
+- [x] [Prometheus instrumentation](https://github.com/prometheus/client_golang). Add basic built-in metrics (counters of events in/out, errors, channel buffer len, processing delays etc.).
+- [x] Add basic file sources: csv
+- [ ] Add basic file sources: avro, parquet, json
+- [x] Add basic file outputs: csv
+- [ ] Add basic file outputs: avro, parquet, json with partitioning and bucketing.
 - [ ] Kafka Source & Output
-- [ ] Add basic stateful tasks: keyed stateful mapping
+- [x] Add basic stateful tasks
+- [ ] Keyed stateful mapping
 - [ ] Add fault tollerance: checkpointing
 - [ ] Add examples/templates
 - [ ] File configuration handling (yaml preferably)

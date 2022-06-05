@@ -18,7 +18,7 @@ type TSEvent[T any] struct {
 func main() {
 	// producer (closure)
 	i := 0
-	string_producer := func(ctx *flow.WorkerContext) (*TSEvent[string], bool) {
+	string_producer := func(ctx *flow.Context) (*TSEvent[string], bool) {
 		if i < 10 {
 			i++
 			return &TSEvent[string]{fmt.Sprintf("src_%s_%d", *ctx.Id, i), time.Now()}, true
@@ -27,14 +27,14 @@ func main() {
 		}
 	}
 	// task functions
-	event_processor := func(input *TSEvent[string], ctx *flow.WorkerContext) (*TSEvent[string], bool) {
+	event_processor := func(input *TSEvent[string], ctx *flow.Context) (*TSEvent[string], bool) {
 		input.event = fmt.Sprintf("%v_after_%s", input.event, *ctx.Id)
 		time.Sleep(1)
 		return input, true
 	}
 
 	// output
-	string_output := func (input *TSEvent[string], ctx *flow.WorkerContext) {
+	string_output := func (input *TSEvent[string], ctx *flow.Context) {
 		delay := time.Now().Sub(input.ts)
 		fmt.Println("> ",*ctx.Id, ":", input.event, "processing time:", delay.Microseconds(), "us")
 	}
