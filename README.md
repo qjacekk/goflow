@@ -40,11 +40,13 @@ And so on (for the implementation details see examples/simple/simple.go).
 ## Why?
 
 - I need a fast lightweight API for this kind of processing that can be quickly deployed in a docker.
-- I need something that is as versatile as Apache Flink/Spark but without the Java development and cluster management overhead.
+- I need something that is as versatile as Apache Flink/Spark but without the Java development and cluster management overhead. Most of my Java Flink jobs would fit into a single machine anyway.
 - Python is too slow.
+- I don't need a fancy web UI. Proper logging and Prometheus client instrumentation with Grafana dashboard will be enough to see what's exactly going on.
 
 ## TODO list
 
+- [ ] unit tests
 - [ ] [Prometheus instrumentation](https://github.com/prometheus/client_golang). Add basic built-in metrics (counters of events in/out, errors, channel buffer len, processing delays etc.).
 - [ ] Add basic file sources: csv, avro, parquet, json
 - [ ] Add basic file outputs: csv, avro, parquet, json with partitioning and bucketing.
@@ -52,3 +54,4 @@ And so on (for the implementation details see examples/simple/simple.go).
 - [ ] Add basic stateful tasks: keyed stateful mapping
 - [ ] Add fault tollerance: checkpointing
 - [ ] Add examples/templates
+- [ ] File configuration handling (yaml preferably)

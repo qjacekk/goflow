@@ -43,6 +43,8 @@ func main() {
 	t := flow.NewTask("Event_Processor", 2, event_processor)
 	o := flow.NewOutput("Event_Output", 1, string_output)
 
+	
+
 	flow.SendsTo[*TSEvent[string]](s, t, 2)
 	flow.SendsTo[*TSEvent[string]](t, o, 2)
 
