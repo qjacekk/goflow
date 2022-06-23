@@ -56,13 +56,13 @@ func main() {
 	}
 	
 	// create Nodes
-	s1 := flow.NewSource("string_source", 2, string_producer)
-	s2 := flow.NewSource("int_source", 1, int_producer)
+	s1 := flow.NewSource("string_source", 2, flow.NewSimpleReader(string_producer))
+	s2 := flow.NewSource("int_source", 1, flow.NewSimpleReader(int_producer))
 	t1 := flow.NewTask("string_processor", 1, string_processor)
 	t2 := flow.NewTask("string_to_int", 1, string_to_int_processor)
 	t3 := flow.NewTask("int_to_string", 1, int_to_string_processor)
-	o1 := flow.NewOutput("string_out", 1, string_output)
-	o2 := flow.NewOutput("int_out", 1, int_output)
+	o1 := flow.NewOutput("string_out", 1, flow.NewSimpleWriter(string_output))
+	o2 := flow.NewOutput("int_out", 1, flow.NewSimpleWriter(int_output))
 
 	// connect Nodes to build a pipeline
 	flow.SendsTo[string](s1, t1, 0)

@@ -23,9 +23,9 @@ func main() {
 	csvOut.WithHeader([]string{"integer", "float", "string"})
 
 	// create Nodes
-	s1 := flow.NewSource("CSV_source", 1, csvIn.Read)
+	s1 := flow.NewSource("CSV_source", 1, csvIn.Reader())
 	t1 := flow.NewTask("FilterFields_task", 1, filterFields)
-	o1 := flow.NewOutputWithClose("CSV_output", 1, csvOut.Write, csvOut.Close)
+	o1 := flow.NewOutput("CSV_output", 1, csvOut.Writer())
 
 	// connect Nodes to build a pipeline
 	flow.SendsTo[[]string](s1, t1, 10)

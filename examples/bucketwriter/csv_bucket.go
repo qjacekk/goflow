@@ -27,13 +27,13 @@ func main() {
 		csvOut.WithHeader([]string{"integer", "float", "string"})
 		return csvOut
 	}
-	bucketWriter := output.NewBucketWriter[[]string]("output", "prefix", ".csv.gz", 100, csvFactory, time.Second)
-	bucketWriter.RolloverPolicy = bucketWriter.MaxRecordRolloverPolicy
+	bucketWriter := output.NewBucketWriter("output", "prefix", ".csv.gz", 100, -1, csvFactory, time.Second)
+	bucketWriter.RolloverPolicy = bucketWriter.MaxRecordsRolloverPolicy
 
 	// create Nodes
-	s1 := flow.NewSource("CSV_source", 1, csvIn.Read)
+	s1 := flow.NewSource("CSV_source", 1, csvIn.Reader())
 	t1 := flow.NewTask("FilterFields_task", 1, filterFields)
-	o1 := flow.NewOutputWithClose("CSV_output", 1, bucketWriter.Write, bucketWriter.Close) // TODO: Replace with Writer[R]
+	o1 := flow.NewOutput("CSV_output", 1, bucketWriter.Writer())
 
 	// connect Nodes to build a pipeline
 	flow.SendsTo[[]string](s1, t1, 10)

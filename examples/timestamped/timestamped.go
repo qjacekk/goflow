@@ -39,9 +39,9 @@ func main() {
 		fmt.Println("> ",*ctx.Id, ":", input.event, "processing time:", delay.Microseconds(), "us")
 	}
 	
-	s := flow.NewSource("Event_Source", 1, string_producer)
+	s := flow.NewSource("Event_Source", 1, flow.NewSimpleReader(string_producer))
 	t := flow.NewTask("Event_Processor", 2, event_processor)
-	o := flow.NewOutput("Event_Output", 1, string_output)
+	o := flow.NewOutput("Event_Output", 1, flow.NewSimpleWriter(string_output))
 
 	flow.SendsTo[*TSEvent[string]](s, t, 2)
 	flow.SendsTo[*TSEvent[string]](t, o, 2)

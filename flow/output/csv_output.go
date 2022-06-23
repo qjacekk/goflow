@@ -59,3 +59,6 @@ func (p *CsvWriter) Write(record []string, ctx *flow.Context) {
 		log.Fatal(err)
 	}
 }
+func (p *CsvWriter) Writer() flow.Writer[[]string] {
+	return p
+}

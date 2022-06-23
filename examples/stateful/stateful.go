@@ -46,9 +46,9 @@ func main() {
 		fmt.Println("out> ",*ctx.Id, ":", input)
 	}
 	
-	s := flow.NewSource("Event_Source", 1, rand_int_producer)
+	s := flow.NewSource("Event_Source", 1, flow.NewSimpleReader(rand_int_producer))
 	t := flow.NewTask("Event_Processor", 2, stateful_event_processor)
-	o := flow.NewOutput("Event_Output", 1, int_output)
+	o := flow.NewOutput("Event_Output", 1, flow.NewSimpleWriter(int_output))
 
 	
 

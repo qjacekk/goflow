@@ -61,3 +61,9 @@ func (p *CsvReader) Read(ctx *flow.Context) ([]string, bool) {
 	p.current_row++
 	return record, true
 }
+func (p *CsvReader) Close() {
+	p.f.Close()
+}
+func (p *CsvReader) Reader() flow.Reader[[]string] {
+	return p
+}
