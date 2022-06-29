@@ -3,49 +3,33 @@ package main
 import (
 	"fmt"
 	"goflow/flow"
+	"goflow/flow/source"
 	"log"
 	"time"
 )
 
-// Timestamped event
-type TSEvent[T any] struct {
-	event T
-	ts time.Time
-}
-
-// This is an example of how to build a pipeline with timestamped events
-// This also shows how to measure end-to-end processing time.
 func main() {
-	// producer (closure)
-	i := 0
-	string_producer := func(id *string) (*TSEvent[string], bool) {
-		if i < 10 {
-			i++
-			return &TSEvent[string]{fmt.Sprintf("src_%s_%d", *id, i), time.Now()}, true
-		} else {
-			return nil, false
-		}
+	readerFactory := func(path string) flow.Reader[[]string]{
+		csvIn := source.NewCsvReader(path)
+		csvIn.SkipHeader()
+		return csvIn.Reader()
 	}
+	fileMonitor := source.NewFileMonitor[[]string]("test/data/csvs", "*.csv", true, time.Second *5, readerFactory)
+
+
+	s1 := flow.NewSource[[]string]("CSV_file_monitor", 1, fileMonitor)
 	// task functions
-	event_processor := func(input *TSEvent[string], t_id *string) (*TSEvent[string], bool) {
-		input.event = fmt.Sprintf("%v_after_%s", input.event, *t_id)
-		time.Sleep(1)
+	printRow := func (input []string, ctx *flow.Context) ([]string, bool) {
+		fmt.Println(">", input)
 		return input, true
 	}
 
-	// output
-	string_output := func (input *TSEvent[string], t_id *string) {
-		delay := time.Now().Sub(input.ts)
-		fmt.Println("> ",*t_id, ":", input.event, "processing time:", delay.Microseconds(), "us")
-	}
-	
-	s := flow.NewSource("Event_Source", 1, string_producer)
-	t := flow.NewTask("Event_Processor", 2, event_processor)
-	o := flow.NewOutput("Event_Output", 1, string_output)
-	
-	//flow.SendsTo[*TSEvent[string]](s, t, 2)
-	flow.SendsTo(s, t.R(), 2)
-	flow.SendsTo(t.S(), o, 2)
+	t1 := flow.NewTask("Print", 1, printRow)
+	o1 := flow.NewOutput("CSV_output", 1, flow.NewDummyWriter[[]string]())
+
+	// connect Nodes to build a pipeline
+	flow.SendsTo[[]string](s1, t1, 10)
+	flow.SendsTo[[]string](t1, o1, 10)
 
 	flow.Pipeline.Print()
 

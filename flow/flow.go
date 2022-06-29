@@ -334,34 +334,39 @@ type Source[OUT any] struct {
 	sender[OUT] 
 	reader Reader[OUT]
 	// instrumentation
-	outCnt prometheus.Counter
-	produceTimeHist prometheus.Histogram
+	OutCnt prometheus.Counter
+	ProduceTimeHist prometheus.Histogram
 }
 
 // Source constructor that creates a new instance and registers it in the Pipeline.
-func NewSource[OUT any](name string, conc int, reader Reader[OUT]) Sender[OUT] {
+//func NewSource[OUT any](name string, conc int, reader Reader[OUT]) Sender[OUT] {
+func NewSource[OUT any](name string, conc int, reader Reader[OUT]) *Source[OUT] {
 	if conc < 1 {
 		log.Panic("concurrency must be >= 1")
 	}
-	outCnt := prometheus.NewCounter(
+	OutCnt := prometheus.NewCounter(
 		prometheus.CounterOpts{
 			Name: name + "_events_out_count",
 			Help: "No of events produced",
 		},
 	)
-	produceTimeHist := prometheus.NewHistogram(
+	ProduceTimeHist := prometheus.NewHistogram(
 		prometheus.HistogramOpts{
 			Name: name + "_produce_time",
 			Help: "Producer time (millis)",
 			Buckets: prometheus.LinearBuckets(1, 1000, 5),
 		},
 	)
-	PReg.MustRegister(outCnt)
-	PReg.MustRegister(produceTimeHist)
-	src := Source[OUT]{node: node{name: name, conc: conc, kind: source}, reader: reader, outCnt: outCnt, produceTimeHist: produceTimeHist}
+	PReg.MustRegister(OutCnt)
+	PReg.MustRegister(ProduceTimeHist)
+	src := Source[OUT]{node: node{name: name, conc: conc, kind: source}, reader: reader, OutCnt: OutCnt, ProduceTimeHist: ProduceTimeHist}
 	Pipeline.RegisterNode(&src)
 	return &src
 }
+func (s *Source[OUT]) S() Sender[OUT] {
+	return s
+}
+
 
 // Starts processing
 func (s *Source[OUT]) Run() {
@@ -381,11 +386,11 @@ func (s *Source[OUT]) Run() {
 				if !ok {
 					break
 				}
-				s.produceTimeHist.Observe(float64(time.Since(start).Milliseconds()))
+				s.ProduceTimeHist.Observe(float64(time.Since(start).Milliseconds()))
 				for _, mq := range s.out {
 					mq.queue <- result
 				}
-				s.outCnt.Inc()
+				s.OutCnt.Inc()
 			}
 			log.Printf("Finishing source %s\n", s_id)
 			
@@ -409,9 +414,9 @@ type Task[IN any, OUT any] struct {
 	sender[OUT]
 	execute     func(input IN, taskCtx *Context) (OUT, bool)
 	// instrumentation
-	inCnt prometheus.Counter
-	outCnt prometheus.Counter
-	runTimeHist prometheus.Histogram
+	InCnt prometheus.Counter
+	OutCnt prometheus.Counter
+	RunTimeHist prometheus.Histogram
 }
 
 // Task constructor that creates a new instance and registers it in the Pipeline.
@@ -422,29 +427,29 @@ func NewTask[IN any, OUT any](name string, conc int, execute func(IN, *Context) 
 	if execute == nil {
 		log.Panic("execute function must not be nil")
 	}
-	inCnt := prometheus.NewCounter(
+	InCnt := prometheus.NewCounter(
 		prometheus.CounterOpts{
 			Name: name + "_events_in_count",
 			Help: "No of events received",
 		},
 	)
-	outCnt := prometheus.NewCounter(
+	OutCnt := prometheus.NewCounter(
 		prometheus.CounterOpts{
 			Name: name + "_events_out_count",
 			Help: "No of events sent",
 		},
 	)
-	runTimeHist := prometheus.NewHistogram(
+	RunTimeHist := prometheus.NewHistogram(
 		prometheus.HistogramOpts{
 			Name: name + "_run_time",
 			Help: "Task time (millis)",
 			Buckets: prometheus.LinearBuckets(1, 1000, 5),
 		},
 	)
-	PReg.MustRegister(inCnt)
-	PReg.MustRegister(outCnt)
-	PReg.MustRegister(runTimeHist)
-	t := Task[IN, OUT]{node: node{name: name, conc: conc, kind: task}, execute: execute, inCnt: inCnt, outCnt: outCnt, runTimeHist: runTimeHist}
+	PReg.MustRegister(InCnt)
+	PReg.MustRegister(OutCnt)
+	PReg.MustRegister(RunTimeHist)
+	t := Task[IN, OUT]{node: node{name: name, conc: conc, kind: task}, execute: execute, InCnt: InCnt, OutCnt: OutCnt, RunTimeHist: RunTimeHist}
 	Pipeline.RegisterNode(&t)
 	return &t
 }
@@ -466,15 +471,15 @@ func (t *Task[IN, OUT]) Run() {
 			workerCtx := Context{Id: &t_id, NodeInstance: t}
 			log.Printf("Starting task %s\n", t_id)
 			for input := range t.in.queue {
-				t.inCnt.Inc()
+				t.InCnt.Inc()
 				start := time.Now()
 				result, ok := t.execute(input, &workerCtx)
-				t.runTimeHist.Observe(float64(time.Since(start).Milliseconds()))
+				t.RunTimeHist.Observe(float64(time.Since(start).Milliseconds()))
 				if ok {
 					for _, mq := range t.out {
 						mq.queue <- result
 					}
-					t.outCnt.Inc()
+					t.OutCnt.Inc()
 				}
 			}
 			log.Printf("Finishing task %s_%d\n", t.name, id)
@@ -498,7 +503,9 @@ func (sw *SimpleWriter[R]) Close() {}
 func NewSimpleWriter[R any](consume func(record R, ctx *Context)) Writer[R] {
 	return &SimpleWriter[R]{consume}
 }
-
+func NewDummyWriter[R any]() Writer[R] {
+	return &SimpleWriter[R]{func(record R, ctx *Context) {}}
+}
 // Output receives events and generates some kind of output to external world (e.g. writes to file
 // or database).
 type Output[IN any] struct {
@@ -507,45 +514,38 @@ type Output[IN any] struct {
 	writer Writer[IN]
 
 	// instrumentation
-	inCnt prometheus.Counter
-	writeTimeHist prometheus.Histogram
+	InCnt prometheus.Counter
+	WriteTimeHist prometheus.Histogram
 }
 
-func newOutput[IN any](name string, conc int, writer Writer[IN]) *Output[IN] {
+func NewOutput[IN any](name string, conc int, writer Writer[IN]) *Output[IN] {
 	if conc < 1 {
 		log.Panic("concurrency must be >= 1")
 	}
 	if writer == nil {
 		log.Panic("writer must not be nil")
 	}
-	inCnt := prometheus.NewCounter(
+	InCnt := prometheus.NewCounter(
 		prometheus.CounterOpts{
 			Name: name + "_events_in_count",
 			Help: "No of events received",
 		},
 	)
-	writeTimeHist := prometheus.NewHistogram(
+	WriteTimeHist := prometheus.NewHistogram(
 		prometheus.HistogramOpts{
 			Name: name + "_write_time",
 			Help: "Output time (millis)",
 			Buckets: prometheus.LinearBuckets(1, 1000, 5),
 		},
 	)
-	PReg.MustRegister(inCnt)
-	PReg.MustRegister(writeTimeHist)
+	PReg.MustRegister(InCnt)
+	PReg.MustRegister(WriteTimeHist)
 
-	o := Output[IN]{node: node{name: name, conc: conc, kind: output}, writer: writer, inCnt: inCnt, writeTimeHist: writeTimeHist}
+	o := Output[IN]{node: node{name: name, conc: conc, kind: output}, writer: writer, InCnt: InCnt, WriteTimeHist: WriteTimeHist}
 	Pipeline.RegisterNode(&o)
 	return &o
 }
 
-// Output constructor that creates a new instance and registers it in the Pipeline.
-func NewOutput[IN any](name string, conc int, writer Writer[IN]) Receiver[IN] {
-	o := newOutput(name, conc, writer)
-	return o
-}
-
-// starts processing
 func (o *Output[IN]) Run() {
 	for id := 0; id < o.conc; id++ {
 		wg.Add(1)
@@ -555,10 +555,10 @@ func (o *Output[IN]) Run() {
 			workerCtx := Context{Id: &o_id, NodeInstance: o}
 			log.Printf("Starting output %s\n", o_id)
 			for input := range o.in.queue {
-				o.inCnt.Inc()
+				o.InCnt.Inc()
 				start := time.Now()
 				o.writer.Write(input, &workerCtx)
-				o.writeTimeHist.Observe(float64(time.Since(start).Milliseconds()))
+				o.WriteTimeHist.Observe(float64(time.Since(start).Milliseconds()))
 			}
 			log.Printf("Finishing output %s_%d\n", o.name, id)
 			o.writer.Close()

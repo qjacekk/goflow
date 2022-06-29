@@ -73,7 +73,7 @@ func main() {
 	// That's actually not a bad thing since it adds a bit of clarity of what type of data is being sent on this
 	// particular connection.
 	// But if the type is not relevant (or too long/complex) - there's a workaround:
-	flow.SendsTo(s2, t3.R(), 0) // this connection sends ints - but this fact is hidden by inference
+	flow.SendsTo(s2.S(), t3.R(), 0) // this connection sends ints - but this fact is hidden by inference
 	// Task has two additional methods: R() and S() that return Receiver[T] and Sender[T] respectively
 	// so the compiler can infere types properly.
 	flow.SendsTo(t1.S(), t2.R(), 0)
