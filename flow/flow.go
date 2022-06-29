@@ -1,30 +1,37 @@
 package flow
 
 // This package provides implementation of a simple not-distributed **concurrent event processing framework**.
-// The data processing is controlled by a **Pipeline** which consists of a number of interconnected Nodes that form a directed graph. 
+// The data processing is controlled by a **Pipeline** which consists of a number of interconnected Nodes that form a directed graph.
 
 // The framework implements the _event stream processing_ model i.e. the data is exchanged between Nodes as unbounded continuous stream of granular pieces of data (aka _events_). An _event_ can be any golang value of any type that can be transported through channels. Both the content of an _event_ as well as its type can change as the event passes through Tasks.
 // Connections between the Nodes (graph edges) are implemented with channles (buffered or unbuffered).
 
-// There are several kinds of Nodes, but they all belong to three main categories: **Sources**, **Tasks** and **Outputs**. The data flows through the pipeline starting from one or more **Sources** that are responsible for extracting the data from external resources (e.g. by reading files or network sockets), then passed through zero or more **Tasks** that perform some kind of transformation on the data to finally reach **Outputs** responsible for exposing the results to some external systems (e.g. loading into a database). So, the most common use case of this framework is a small ETL (Extract-Transform-Load) pipeline.
+// There are several kinds of Nodes, but they all belong to three main categories: **Sources**, **Tasks** and **Outputs**. 
+// The data flows through the pipeline starting from one or more **Sources** that are responsible for extracting the data from external resources (e.g. by reading files or network sockets), then passed through zero or more **Tasks** that perform some kind of transformation on the data to finally reach **Outputs** responsible for exposing the results to some external systems (e.g. loading into a database). So, the most common use case of this framework is a small ETL (Extract-Transform-Load) pipeline.
 
 // The framework laverages golang built-in concurrency support - each Node can be executed in several parallel instances.
 
 //  Another golang feature - channels - allow for simple and reliable data exchange between Tasks and also provide buffering, backpressure, synchronus or asynchronous processing (with buffered or unbuffered channels).
 
-// The framework is generic i.e. Nodes and processing functions are generic so it's easy to modify existing pipeline while preserving the strongly typed nature of golang. Thanks to type inference it's usually not necessary to provide type parameters explicitly (as long as they can be infered from the processing 
+// The framework is generic i.e. Nodes and processing functions are generic so it's easy to modify existing pipeline while preserving the strongly typed nature of golang. Thanks to type inference it's usually not necessary to provide type parameters explicitly (as long as they can be infered from the processing
 // functions or constructors).
 
 import (
 	"fmt"
 	"log"
+	"net/http"
 	"sync"
+	"time"
+
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 // Package level variables
 
 // Pipeline is a package level singleton that controls the pipeline
 var Pipeline pipeline = pipeline{graph: make(map[string][]Node), sources: make(map[string]Node), others: make(map[string]Node)} 
+var PReg *prometheus.Registry = prometheus.NewRegistry()
 
 // wg provides synchronization of Nodes. Pipleline can be shut down only after all Nodes have finished their job.
 var wg sync.WaitGroup  // WaitGroup to synchronize all nodes
@@ -49,7 +56,7 @@ type Node interface {
 	Name() string
 	Conc() int
 	Kind() NodeKind
-	run()
+	Run()
 }
 
 // Base struct for all kinds of Nodes. Each specific node structure must embed this to inherit Node interface.
@@ -68,6 +75,16 @@ func (n node) Conc() int {
 }
 func (n node) Kind() NodeKind {
 	return n.kind
+}
+
+/* CONTEXT */
+
+// NodeContext is a structure passed to a worker thread in the processing function.
+// WorkerContext contains thread-local parameters and variables.
+type Context struct {
+	Id *string  // workerId, unique for each thread (goroutine)
+	NodeInstance Node
+	State any
 }
 
 
@@ -207,16 +224,36 @@ func (p *pipeline) RegisterEdge(snd Node, rec Node) {
 func (p *pipeline) Run() {
 	// start processing
 	for _, node:= range p.others {
-		node.run()
+		node.Run()
 	}
 	// start sources last
 	for _, src:= range p.sources {
-		src.run()
+		src.Run()
 	}
 }
 
 // Waits until the processing is completed and all channels safely shut down.
 func (p *pipeline) Wait() {
+	wg.Wait()
+}
+
+// Waits until the processing is completed and all channels safely shut down.
+// Starts Prometheus metrics server
+func (p *pipeline) WaitWithMetrics(hostAndPort string) {
+	go func(hp string) {
+		if hp == "" {
+			hp = ":2112"
+		}
+		log.Printf("Starting Prometheus metrics server at: %s/metrics\n", hp)
+		// TODO: add option to enable built-in go metrics
+		//PReg.MustRegister(collectors.NewGoCollector(
+		//	collectors.WithGoCollections(collectors.GoRuntimeMemStatsCollection | collectors.GoRuntimeMetricsCollection),
+		//	))
+
+		handler := promhttp.HandlerFor(PReg, promhttp.HandlerOpts{})
+		http.Handle("/metrics", handler)
+		http.ListenAndServe(":2112", nil)
+	}(hostAndPort)
 	wg.Wait()
 }
 
@@ -271,36 +308,68 @@ func SendsTo[T any](snd Sender[T], rec Receiver[T], queueSize int) {
 
 
 /*    SOURCE    */
+type Reader[R any] interface {
+	Read(ctx *Context) (R, bool)
+	Close()
+}
+type SimpleReader[R any] struct {
+	Produce func(ctx *Context) (R, bool)
+}
+func (sr *SimpleReader[R]) Read(ctx *Context) (R, bool) {
+	return sr.Produce(ctx)
+}
+func (sr *SimpleReader[R]) Close() { }
+func NewSimpleReader[R any](produce func(ctx *Context)(R, bool)) Reader[R] {
+	return &SimpleReader[R]{Produce: produce}
+}
+
 
 // Source is a node that produces events by extracing data from some external resource (e.g. file,
-// network socket, database etc.) in produce function (passed as a parameter to NewSource() constructor).
-// Source calls the generic produce function:
-//     produce     func(t_id *string) (OUT, bool)
-// repetedely to get next piece of data (event of type OUT) and sends it down the pipleline.
+// network socket, database etc.) by using Rader instance.
+// Source calls Reader.Read(...) (R, bool) function repetedely to get next piece of data (event of type OUT) and sends it down the pipleline.
 // The second return value - the boolean flag indicates if the event is valid.
-// If the flag is falls then source ends processing and shuts down the pipeline (i.e. closes all downstream channels).
-// Produce function should follow generator pattern, it can be a closure or a function.
+// If the flag is false then source ends processing and shuts down the pipeline (i.e. closes all downstream channels).
 type Source[OUT any] struct {
 	node
 	sender[OUT] 
-	produce     func(t_id *string) (OUT, bool)
+	reader Reader[OUT]
+	// instrumentation
+	OutCnt prometheus.Counter
+	ProduceTimeHist prometheus.Histogram
 }
 
 // Source constructor that creates a new instance and registers it in the Pipeline.
-func NewSource[OUT any](name string, conc int, produce func(t_id *string)(OUT, bool)) Sender[OUT] {
+//func NewSource[OUT any](name string, conc int, reader Reader[OUT]) Sender[OUT] {
+func NewSource[OUT any](name string, conc int, reader Reader[OUT]) *Source[OUT] {
 	if conc < 1 {
 		log.Panic("concurrency must be >= 1")
 	}
-	if produce == nil {
-		log.Panic("produce function must not be nil")
-	}
-	src := Source[OUT]{node: node{name: name, conc: conc, kind: source}, produce: produce}
+	OutCnt := prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Name: name + "_events_out_count",
+			Help: "No of events produced",
+		},
+	)
+	ProduceTimeHist := prometheus.NewHistogram(
+		prometheus.HistogramOpts{
+			Name: name + "_produce_time",
+			Help: "Producer time (millis)",
+			Buckets: prometheus.LinearBuckets(1, 1000, 5),
+		},
+	)
+	PReg.MustRegister(OutCnt)
+	PReg.MustRegister(ProduceTimeHist)
+	src := Source[OUT]{node: node{name: name, conc: conc, kind: source}, reader: reader, OutCnt: OutCnt, ProduceTimeHist: ProduceTimeHist}
 	Pipeline.RegisterNode(&src)
 	return &src
 }
+func (s *Source[OUT]) S() Sender[OUT] {
+	return s
+}
+
 
 // Starts processing
-func (s Source[OUT]) run() {
+func (s *Source[OUT]) Run() {
 	for _, mq := range s.out {
 		mq.AddProducer(s.conc)
 	}
@@ -309,15 +378,19 @@ func (s Source[OUT]) run() {
 		go func(name string, id int) {
 			defer s.close()
 			s_id := fmt.Sprintf("%s_%d", s.Name(), id)
+			workerCtx := Context{Id: &s_id, NodeInstance: s}
 			log.Printf("Starting source %s\n", s_id)
 			for {
-				result, ok := s.produce(&s_id)
+				start := time.Now()
+				result, ok := s.reader.Read(&workerCtx)
 				if !ok {
 					break
 				}
+				s.ProduceTimeHist.Observe(float64(time.Since(start).Milliseconds()))
 				for _, mq := range s.out {
 					mq.queue <- result
 				}
+				s.OutCnt.Inc()
 			}
 			log.Printf("Finishing source %s\n", s_id)
 			
@@ -339,18 +412,44 @@ type Task[IN any, OUT any] struct {
 	node
 	receiver[IN]
 	sender[OUT]
-	execute     func(input IN, t_id *string) (OUT, bool)
+	execute     func(input IN, taskCtx *Context) (OUT, bool)
+	// instrumentation
+	InCnt prometheus.Counter
+	OutCnt prometheus.Counter
+	RunTimeHist prometheus.Histogram
 }
 
 // Task constructor that creates a new instance and registers it in the Pipeline.
-func NewTask[IN any, OUT any](name string, conc int, execute func(IN, *string) (OUT, bool)) *Task[IN, OUT] {
+func NewTask[IN any, OUT any](name string, conc int, execute func(IN, *Context) (OUT, bool)) *Task[IN, OUT] {
 	if conc < 1 {
 		log.Panic("task concurrency must be >= 1")
 	}
 	if execute == nil {
 		log.Panic("execute function must not be nil")
 	}
-	t := Task[IN, OUT]{node: node{name: name, conc: conc, kind: task}, execute: execute}
+	InCnt := prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Name: name + "_events_in_count",
+			Help: "No of events received",
+		},
+	)
+	OutCnt := prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Name: name + "_events_out_count",
+			Help: "No of events sent",
+		},
+	)
+	RunTimeHist := prometheus.NewHistogram(
+		prometheus.HistogramOpts{
+			Name: name + "_run_time",
+			Help: "Task time (millis)",
+			Buckets: prometheus.LinearBuckets(1, 1000, 5),
+		},
+	)
+	PReg.MustRegister(InCnt)
+	PReg.MustRegister(OutCnt)
+	PReg.MustRegister(RunTimeHist)
+	t := Task[IN, OUT]{node: node{name: name, conc: conc, kind: task}, execute: execute, InCnt: InCnt, OutCnt: OutCnt, RunTimeHist: RunTimeHist}
 	Pipeline.RegisterNode(&t)
 	return &t
 }
@@ -360,7 +459,7 @@ func (t *Task[IN, OUT]) R() Receiver[IN] { return t}
 func (t *Task[IN, OUT]) S() Sender[OUT] { return t}
 
 // starts processing
-func (t Task[IN, OUT]) run() {
+func (t *Task[IN, OUT]) Run() {
 	for _, mq := range t.out {
 		mq.AddProducer(t.conc)
 	}
@@ -369,13 +468,18 @@ func (t Task[IN, OUT]) run() {
 		go func(name string, id int) {
 			defer t.close()
 			t_id := fmt.Sprintf("%s_%d", t.name, id)
+			workerCtx := Context{Id: &t_id, NodeInstance: t}
 			log.Printf("Starting task %s\n", t_id)
 			for input := range t.in.queue {
-				result, ok := t.execute(input, &t_id)
+				t.InCnt.Inc()
+				start := time.Now()
+				result, ok := t.execute(input, &workerCtx)
+				t.RunTimeHist.Observe(float64(time.Since(start).Milliseconds()))
 				if ok {
 					for _, mq := range t.out {
 						mq.queue <- result
 					}
+					t.OutCnt.Inc()
 				}
 			}
 			log.Printf("Finishing task %s_%d\n", t.name, id)
@@ -385,41 +489,79 @@ func (t Task[IN, OUT]) run() {
 
 
 /*    OUTPUT    */
-
-
+type Writer[R any] interface {
+	Write(record R, ctx *Context)
+	Close()
+}
+type SimpleWriter[R any] struct {
+	Consume func(record R, ctx *Context)
+}
+func (sw *SimpleWriter[R]) Write(record R, ctx *Context) {
+	sw.Consume(record, ctx)
+}
+func (sw *SimpleWriter[R]) Close() {}
+func NewSimpleWriter[R any](consume func(record R, ctx *Context)) Writer[R] {
+	return &SimpleWriter[R]{consume}
+}
+func NewDummyWriter[R any]() Writer[R] {
+	return &SimpleWriter[R]{func(record R, ctx *Context) {}}
+}
 // Output receives events and generates some kind of output to external world (e.g. writes to file
 // or database).
 type Output[IN any] struct {
 	node
 	receiver[IN]
-	consume  func(data IN, t_id *string)
+	writer Writer[IN]
+
+	// instrumentation
+	InCnt prometheus.Counter
+	WriteTimeHist prometheus.Histogram
 }
 
-// Output constructor that creates a new instance and registers it in the Pipeline.
-func NewOutput[IN any](name string, conc int, consume func(data IN, t_id *string)) Receiver[IN] {
+func NewOutput[IN any](name string, conc int, writer Writer[IN]) *Output[IN] {
 	if conc < 1 {
 		log.Panic("concurrency must be >= 1")
 	}
-	if consume == nil {
-		log.Panic("collect function must not be nil")
+	if writer == nil {
+		log.Panic("writer must not be nil")
 	}
-	o := Output[IN]{node: node{name: name, conc: conc, kind: output}, consume: consume}
+	InCnt := prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Name: name + "_events_in_count",
+			Help: "No of events received",
+		},
+	)
+	WriteTimeHist := prometheus.NewHistogram(
+		prometheus.HistogramOpts{
+			Name: name + "_write_time",
+			Help: "Output time (millis)",
+			Buckets: prometheus.LinearBuckets(1, 1000, 5),
+		},
+	)
+	PReg.MustRegister(InCnt)
+	PReg.MustRegister(WriteTimeHist)
+
+	o := Output[IN]{node: node{name: name, conc: conc, kind: output}, writer: writer, InCnt: InCnt, WriteTimeHist: WriteTimeHist}
 	Pipeline.RegisterNode(&o)
 	return &o
 }
 
-// starts processing
-func (o Output[IN]) run() {
+func (o *Output[IN]) Run() {
 	for id := 0; id < o.conc; id++ {
 		wg.Add(1)
 		go func(name string, id int) {
 			defer wg.Done()
-			t_id := fmt.Sprintf("%s_%d", o.name, id)
-			log.Printf("Starting output %s\n", t_id)
+			o_id := fmt.Sprintf("%s_%d", o.name, id)
+			workerCtx := Context{Id: &o_id, NodeInstance: o}
+			log.Printf("Starting output %s\n", o_id)
 			for input := range o.in.queue {
-				o.consume(input, &t_id)
+				o.InCnt.Inc()
+				start := time.Now()
+				o.writer.Write(input, &workerCtx)
+				o.WriteTimeHist.Observe(float64(time.Since(start).Milliseconds()))
 			}
 			log.Printf("Finishing output %s_%d\n", o.name, id)
+			o.writer.Close()
 		}(o.name, id)
 	}
 }

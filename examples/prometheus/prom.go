@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"goflow/flow"
 	"log"
+	"time"
 )
 
 func main() {
@@ -12,6 +13,7 @@ func main() {
 	string_producer := func(ctx *flow.Context) (string, bool) {
 		if i < 300 {
 			i++
+			time.Sleep(1 * time.Second)
 			return fmt.Sprintf("src_%s_%d", *ctx.Id, i), true
 		} else {
 			return "", false
@@ -21,6 +23,7 @@ func main() {
 	int_producer := func(ctx *flow.Context) (int, bool) {
 		if j < 300 {
 			j++
+			time.Sleep(500 * time.Millisecond)
 			return j, true
 		} else {
 			return -1, false
@@ -51,7 +54,7 @@ func main() {
 	int_output := func (data int, ctx *flow.Context) {
 		fmt.Println(*ctx.Id, "output:", data)
 	}
-
+	
 	// create Nodes
 	s1 := flow.NewSource("string_source", 2, flow.NewSimpleReader(string_producer))
 	s2 := flow.NewSource("int_source", 1, flow.NewSimpleReader(int_producer))
@@ -83,6 +86,6 @@ func main() {
 
 	flow.Pipeline.Run()
 	log.Println("Waiting")
-	flow.Pipeline.Wait()
+	flow.Pipeline.WaitWithMetrics("")
 	log.Println("DONE")
 }
